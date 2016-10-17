@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>//Manage Program Option
+Program.AddOption("serial-port", "dev/ttyUSB0", "1. Serial port name", "text");
+Program.AddOption("serial-baud", "38400", "2. Serial port baud rate", "text");
+
+//Start the program
+Program.Run();</ScriptCondition>
+  <ScriptSource>var serialPort = Program.Option("serial-port").Value;
+int serialBaud;
+if(!Int32.TryParse(Program.Option("serial-baud").Value, out serialBaud))
+  throw new Exception("Port Baud must be an integer");
+var rfxDomain = "HomeAutomation.RFX";
+
+var GetTemperature = new Func&lt;byte[], double&gt;((RfxComMessage) =&gt; {
+  return ((RfxComMessage[6] &amp; 0x80) == 0 ? 1 : -1) * ((double)((RfxComMessage[6] &amp; 0x7F) * 256 + RfxComMessage[7]) / 10);
+});
+
+var GetHumidity = new Func&lt;byte[], string&gt;((RfxComMessage) =&gt; {
+  switch (RfxComMessage[9])
+  {
+    case 0x00:
+      return "Dry";
+    case 0x01:
+      return "Comfortable";
+    case 0x02:
+      return "Normal";
+    case 0x03:
+      return "Wet";
+    default:
+      return "Undefined";
+  }
+});
+
+var GetForecast = new Func&lt;byte[], string&gt; ((RfxComMessage) =&gt; {
+  switch (RfxComMessage[12])
+  {
+    case 0x01:
+      return "Sunny";
+    case 0x02:
+      return "Partly cloudy";
+    case 0x03:
+      return "Cloudy";
+    case 0x04:
+      return "Rain";
+    default:
+      return "Undefined";
+  }
+});
+
+var CreateModule = new Func&lt;string, string, ModuleHelper&gt;((unitId, sensorType) =&gt; {
+  ModuleHelper sensor = Modules.InDomain(rfxDomain).WithAddress(unitId).Get();
+  if (!sensor.Exists)
+  {
+    Program.AddVirtualModule(rfxDomain, unitId, "Sensor", sensorType);
+    sensor = Modules.InDomain(rfxDomain).WithAddress(unitId).Get();
+    if (!sensor.Exists)
+      throw new Exception("Unable to create sensor with ID " + unitId);
+    Program.Notify(rfxDomain, String.Format("{0} {1} ble lagt til", sensorType, unitId));
+  }
+  return sensor;
+});
+
+var GetBatteryStatus = new Func&lt;int, string&gt;((batteryValue) =&gt; {
+  return ((batteryValue &amp; 0xf) == 0 ? "10" : "100");
+});
+
+Action&lt;string&gt;
+  HandleStringReceived = (string message) =&gt; {
+  // this will be called every time a message is received from serial port
+  Program.Notify("SerialPort String", message);
+};
+
+Action&lt;byte[]&gt;
+  HandleMessageReceived = (byte[] message) =&gt; {
+  try
+  {
+    //Check if the length seems to be a RFXCom message
+    if ((message[0] != message.Length - 1))
+    {
+      Program.Notify("RFXTRX433E", "Ignore message : " + BitConverter.ToString(message));
+      return;
+    }
+    if(message[0] == 0x4)
+    {
+      if(message[2] == 0x1) //Handshake ACK returned
+        return;
+      else
+      {
+        Program.Notify("RFXTRX433E", "Unknown return value:" + BitConverter.ToString(message));
+        return;
+      }
+    }
+
+    //Program.Notify("RFXTRX433E", "Processing message : " + BitConverter.ToString(message));
+    string unitId = "";
+    string subType;
+    double tempC;
+    int humidity;
+    string humidityStatus;
+    string batteryStatus;
+    int pressure;
+    string forecast;
+    ModuleHelper sensor;
+    switch (message[1])
+    {
+      case 0x54:
+      // Barometer/temp/hygro sensors
+      unitId = String.Format("{0}", message[4] + message[5]);
+      switch (message[2])
+        {
+          case 0x01:
+            subType = "THB1 - BTHR918, BTHGN129";
+            break;
+          case 0x02:
+            subType = "THB2 - BTHR918N, BTHR968";
+            break;
+          default:
+            subType = "Unknown";
+            break;
+        }
+        tempC = GetTemperature(message);
+        pressure = message[10] * 256 + message[11];
+        humidity = message[8];
+        humidityStatus = GetHumidity(message);
+        forecast = GetForecast(message);
+        batteryStatus = GetBatteryStatus(message[13]);
+        sensor = CreateModule(unitId, "oregon/environment/barotermhygro");
+        Program.RaiseEvent(sensor, "Sensor.Temperature", tempC.ToString(), ":nopopup:Baro, temp and humidity sensor");
+        Program.RaiseEvent(sensor, "Sensor.Humidity", humidity.ToString(), ":nopopup:Baro, temp and humidity sensor");
+        Program.RaiseEvent(sensor, "Sensor.Pressure", pressure.ToString(), ":nopopup:Baro, temp and humidity sensor");
+        Program.RaiseEvent(sensor, "Sensor.Forecast", forecast.ToString(), ":nopopup:Baro, temp and humidity sensor");
+        Program.RaiseEvent(sensor, "Status.Battery", batteryStatus, ":nopopup:Battery barometer");
+        break;
+      case 0x55:
+        // Rain sensors
+      	unitId = String.Format("{0}", message[4] + message[5]);
+        switch(message[2])
+        {
+          case 0x01:
+            subType = "RGR126/682/918/928";
+            break;
+          case 0x02:
+            subType = "PCR800";
+            break;
+          case 0x03:
+            subType = "TFA/Honeywell TS906";
+            break;
+          case 0x04:
+            subType = "UPM RG700";
+            break;
+          case 0x05:
+            subType = "WS2300";
+            break;
+          case 0x06:
+            subType = "La Crosse TX5";
+            break;
+          case 0x07:
+            subType = "Alecto WS4500, Auriol H13726, Hama EWS1500, Meteoscan W155/W160, Ventus WS155";
+            break;
+          default:
+            subType = "Unknown";
+            break;
+        }
+        var rainRate = message[6] * 256 + message[7];
+        var rainTotal = message[8] * 256 + message[9] * 256 + message[10];
+        batteryStatus = GetBatteryStatus(message[11]);
+        sensor = CreateModule(unitId, "homegenie/generic/sensor");
+        Program.RaiseEvent(sensor, "Sensor.RainRate", rainRate.ToString(), ":nopopup:Rain rate");
+        Program.RaiseEvent(sensor, "Sensor.RainTotal", rainTotal.ToString(), ":nopopup:Rain total");
+        Program.RaiseEvent(sensor, "Status.Battery", batteryStatus, ":nopopup:Battery rain sensor");
+        break;
+      case 0x56:
+        // Wind sensors
+      	unitId = String.Format("{0}", message[4] + message[5]);
+        switch(message[2])
+        {
+          case 0x01:
+            subType = "WTGR800";
+            break;
+          case 0x02:
+            subType = "WGR800";
+            break;
+          case 0x03:
+            subType = "STR918, WGR918, WGR928";
+            break;
+          case 0x04:
+            subType = "TFA/Honeywell TS805";
+            break;
+          case 0x05:
+            subType = "UPM WDS500";
+            break;
+          case 0x06:
+            subType = "WS2300";
+            break;
+          case 0x07:
+            subType = "Alecto WS4500, Auriol H13726, Hama EWS1500, Meteoscan W155/W160,Ventus WS155";
+            break;
+          default:
+            subType = "Unknown";
+            break;
+        }
+        var windDirection = message[6] * 256 + message[7];
+        var avgWindSpeed = (message[8] * 256 + message[9]) / 10;
+        var windGust = (message[10] * 256 + message[11]) / 10;
+        //batteryStatus = GetBatteryStatus(message[18]);
+        sensor = CreateModule(unitId, "homegenie/generic/sensor");
+        Program.RaiseEvent(sensor, "Sensor.WindDirection", windDirection.ToString(), ":nopopup:Wind direction");
+        Program.RaiseEvent(sensor, "Sensor.WindSpeed", avgWindSpeed.ToString(), ":nopopup:Average wind speed");
+      	Program.RaiseEvent(sensor, "Sensor.WindGust", windGust.ToString(), ":nopopup:Wind gust");
+        //Program.RaiseEvent(sensor, "Status.Battery", batteryStatus, ":nopopup:Battery wind sensor");
+        break;
+      
+        case 0x20:
+      	// X10 Door/window/motion sensors  
+      	unitId = String.Format("{0}", message[4] * 256 + message[5] + message[6]);
+        switch (message[2])
+        {
+          case 0x0:
+            //door/winwow
+            subType = "X10 security door/window sensor";
+            break;
+          case 0x1:
+          	//HEU
+            subType = "X10 security motion sensor";
+            break;
+          case 0x2:
+            //Anslut
+            subType = "X10 security remote";
+            break;
+        }
+      	var receivedSensorStatus = message[7] &amp; 0x7;
+        string sensorStatus = string.Empty;
+      	switch(receivedSensorStatus)
+        {
+        	case 0x0:
+          		sensorStatus = "0";
+          		break;
+            case 0x2:
+          		sensorStatus = "255";
+          		break;
+        }
+        sensor = CreateModule(unitId, "homegenie/generic/doorwindow");
+        Program.RaiseEvent(sensor, "Sensor.DoorWindow", sensorStatus, "Door and window sensor");
+        break;
+      case 0x11:
+      	// Door/window/motion sensors  
+      	unitId = String.Format("{0}", message[4] * 256 + message[5] + message[6] + message[7]);
+        switch (message[2])
+        {
+          case 0x0:
+            //AC
+            subType = "AC/Nexa";
+            break;
+          case 0x1:
+          	//HEU
+            subType = "HEU";
+            break;
+          case 0x2:
+            //Anslut
+            subType = "Anslut";
+            break;
+        }
+        sensorStatus = Convert.ToBoolean(message[9]) == true ? "255" : "0";
+        sensor = CreateModule(unitId, "homegenie/generic/doorwindow");
+        Program.RaiseEvent(sensor, "Sensor.DoorWindow", sensorStatus, "Door and window sensor");
+        break;
+      case 0x52:
+        // Temp/hygro sensors
+      	unitId = String.Format("{0}", message[4] + message[5]);
+        switch (message[2])
+        {
+          case 0x01:
+            subType = "THGN122/123, THGN132, THGR122/228/238/268";
+            break;
+          case 0x02:
+            subType = "THGR810, THGN800, THGR810";
+            break;
+          case 0x03:
+            subType = "RTGR328";
+            break;
+          case 0x04:
+            subType = "THGR328";
+            break;
+          case 0x05:
+            subType = "WTGR800";
+            break;
+          case 0x06:
+            subType = "THGR918/928, THGRN228, THGN500";
+            break;
+          case 0x07:
+            subType = "TFA TS34C, Cresta";
+            break;
+          case 0x08:
+            subType = "WT260,WT260H,WT440H,WT450,WT450H";
+            break;
+          case 0x09:
+            subType = "Viking 02035,02038 (02035 has no humidity)";
+            break;
+          case 0x0A:
+            subType = "Rubicson";
+            break;
+          case 0x0B:
+            subType = "EW109";
+            break;
+          default:
+            subType = "Undefined";
+            break;
+        }
+        tempC = GetTemperature(message);
+        humidity = message[8];
+        humidityStatus = GetHumidity(message);
+        batteryStatus = GetBatteryStatus(message[10]);
+        int rssi = message[10] &gt;&gt; 4;
+        sensor = CreateModule(unitId, "homegenie/generic/sensor");
+        Program.RaiseEvent(sensor, "Sensor.Temperature", tempC.ToString(), ":nopopup:Temperature and Humidity sensor");
+        Program.RaiseEvent(sensor, "Sensor.Humidity", humidity.ToString(), ":nopopup:Temperature and Humidity sensor");
+        Program.RaiseEvent(sensor, "Status.Battery", batteryStatus, ":nopopup:Temperature and Humidity sensor");
+        break;
+      default:
+      	Program.Notify("RFXTRX433E HandleMessageReceived", "Unable decode object type : " + message[1] + " from message " + BitConverter.ToString(message));
+      	break;
+    }
+  }
+  catch (Exception ex)
+  {
+    Program.Notify("RFXTRX433E HandleMessageReceived", "Error : " + ex.Message);
+  }
+};
+
+Action&lt;bool&gt;
+  HandleStatusChanged = (bool connected) =&gt; {
+  Program.Notify("SerialPort Status", connected ? "CONNECTED!" : "DISCONNECTED!");
+};
+
+Func&lt;string, string, string, string, bool&gt; ModuleExists = (string domain, string address, string deviceType, string widget) =&gt; {
+  var selection = Modules.InDomain(domain).SelectedModules;
+  bool found = false;
+  foreach(var module in selection){
+    if (module.Address == address){
+      found = true;
+      break;
+    }
+  }
+
+  if (!found){
+    Program.Notify(deviceType, address + " added");
+    Program.AddVirtualModule(domain, address, deviceType, widget);
+  }
+  return true;
+};
+
+Func&lt;string, byte[]&gt; HexStringToByteArray = (string text) =&gt; {
+  byte[] bytes = text.Split()
+    .Select(t =&gt; byte.Parse(t, NumberStyles.AllowHexSpecifier))
+    .ToArray();
+  return bytes;
+};
+
+/*var NexaModules = new Dictionary&lt;string, string[]&gt;();
+Action CreateNexaModules = () =&gt; {
+  NexaModules.Add("1", new string[]{"Gang-Taklampe", "Dimmer", "homegenie/generic/dimmer", "0B 11 00 41 02 B3 13 ED 01"});
+
+  for(int i = 1; i &lt;= NexaModules.Count; i++)
+  {
+    bool created = ModuleExists(rfxDomain, i.ToString(), NexaModules[i.ToString()][1], NexaModules[i.ToString()][2]);  
+  }
+};
+CreateNexaModules();
+
+When.WebServiceCallReceived(rfxDomain, (args) =&gt; {
+  var reqs = ((string)args).Split('/');
+  var response = "{'ResponseValue' : 'OK'}";
+  const string NEXA_COMMAND_ON = "01";
+  const string NEXA_COMMAND_OFF = "00";
+  const string NEXA_COMMAND_DIM = "02";
+  var dimSerialValue = "0F";
+  var moduleAddress = reqs[1];
+  var command = reqs[2];
+  var dimParameter = reqs.Length &gt; 3 ? Uri.UnescapeDataString(reqs[3]) : "0";
+
+  if(dimParameter != "undefined")
+  {
+    var dimValue = (Int32.Parse(dimParameter) / 6);
+    if(dimValue &gt; 15)
+    {
+      dimSerialValue = "0F";
+      dimParameter = "100";
+    }
+    else
+      dimSerialValue = dimValue.ToString("X2");
+  }
+  var serialCommand = "";
+  var apiStatus = "";
+
+  switch(command)
+  {
+    case "Control.On":
+    	serialCommand = NEXA_COMMAND_ON;
+    	apiStatus = "1.0";
+    	break;
+    case "Control.Off":
+    	serialCommand = NEXA_COMMAND_OFF;
+    	apiStatus = "0.0";
+    	break;
+    case "Control.Level":
+    	serialCommand = NEXA_COMMAND_DIM;
+    	apiStatus = (double.Parse(dimParameter.Replace(",", "."), CultureInfo.InvariantCulture) / 100D).ToString();
+    	break;
+  }
+  try
+  {
+    var module = Modules.InDomain(rfxDomain).WithAddress(moduleAddress).Get();
+    var testcommand = String.Format("{0} {1} {2} {3}", NexaModules[moduleAddress][3] , serialCommand, dimSerialValue, "70" );
+    SerialPort.SendMessage(HexStringToByteArray(testcommand)); 
+    Program.RaiseEvent(module, "Status.Level", apiStatus, NexaModules[moduleAddress][0]);
+  } 
+  catch (Exception ex) 
+  { 
+    response = ex.Message + " " + ex.StackTrace;
+    return response;
+  }
+  return response;
+});
+*/
+if (serialPort != ""){
+  SerialPort.WithName(serialPort)
+    .OnStatusChanged(HandleStatusChanged)
+    .OnMessageReceived(HandleMessageReceived);
+}
+
+// Watchdog
+while (Program.IsEnabled)
+{
+  if ((serialPort!="") &amp;&amp; !SerialPort.IsConnected)
+    SerialPort.Connect(serialBaud);
+  Pause(30);
+}</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1000</Address>
+  <Name>RFXTRX433E</Name>
+  <Description>Handles signals for the RFXTRX433E Tranciever from RFXCom</Description>
+  <Group>RFXCom</Group>
+  <Features />
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime>2016-10-17T14:07:48.646866Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>
