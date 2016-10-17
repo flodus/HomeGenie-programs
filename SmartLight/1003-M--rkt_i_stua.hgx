@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>Program.Setup(()=&gt;
+{
+  Program.AddOption("StartTime", "17", "Earliest time to trigger the light (in hours", "text");
+  Program.AddOption("LuminanceThreshold1", "0", "When detected light is below this first threshold, the program will run the initial light scene", "text");
+  Program.AddOption("LuminanceThreshold2", "0", "When detected light is below the second threshold, the program will set a new light scene", "text");
+});
+return true;</ScriptCondition>
+  <ScriptSource>When.ModuleParameterChanged((module, parameter) =&gt; {
+  if (module.IsOfDeviceType("Sensor"))
+  {
+    if (parameter.Name == "Sensor.Luminance"){
+      var startTime = new TimeSpan((int)Program.Option("StartTime").DecimalValue, 0, 0);
+      var luminanceThreshold1 = Program.Option("LuminanceThreshold1").DecimalValue;
+      var luminanceThreshold2 = Program.Option("LuminanceThreshold2").DecimalValue;
+      if(module.Instance.Name == "Multisensor (stue)")
+      {
+        var nightMode = Modules
+          .InDomain("HomeAutomation.House").WithName("Night mode").Get()
+          .Parameter("Status.Level").DecimalValue;
+        
+        if(nightMode &gt; 0 || DateTime.Now.TimeOfDay &lt; startTime)
+          return false;
+        var luminance = parameter.DecimalValue;
+        if(luminance &lt;= luminanceThreshold1)
+        {
+          Modules.WithName("Gulvlampe veg").Command("Control.Level").Set("40");
+          Modules.WithName("Bordlampe speil").On();
+        }
+        if(luminance &lt; luminanceThreshold2) //&amp;&amp; Modules.WithName("Taklampe (stue)").Get().Parameter("Status.Level").DecimalValue &lt; 1)
+        {
+          Modules.WithName("Vinduslampe veranda").Command("Control.Level").Set("100");
+          Modules.WithName("Vinduslampe veg").Command("Control.Level").Set("100");
+          Modules.WithName("Taklampe (stue)").Command("Control.Level").Set("100");
+          Modules.WithName("Bordlampe veg").On();
+          Modules.WithName("Gulvlampe veranda").On();
+        }
+      }
+      return false;
+    }
+  }
+  return true;
+});
+Program.GoBackground();</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1003</Address>
+  <Name>M??rkt i stua</Name>
+  <Description />
+  <Group>Lights</Group>
+  <Features />
+  <ActivationTime>2016-10-17T15:32:49.471368Z</ActivationTime>
+  <TriggerTime>2016-10-17T15:32:49.627211Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>

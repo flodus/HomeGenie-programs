@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>Program
+  .AddFeature("", "Switch,Light,Dimmer", "HomeGenie.NightLight.Enable", "Enable Night Light Control", "checkbox")
+  .AddFeature("", "Switch,Light,Dimmer", "HomeGenie.NightLight.SwitchOffTimeout", "Turn off after timeout (minutes)", "slider:0:10:1")
+  .Run();</ScriptCondition>
+  <ScriptSource>const string NIGHT_LIGHT_ENABLE = "HomeGenie.NightLight.Enable";
+const string TURNOFF_TIMEOUT = "HomeGenie.NightLight.SwitchOffTimeout";
+const string LAST_EVENT = "HomeGenie.NightLight.LastEvent";
+const double SENSOR_ON = 255;
+const double SENSOE_OFF = 0;
+const double MODULE_ON = 1;
+const double MODULE_OFF = 0;
+
+var nightLight_devices = Modules.WithFeature(NIGHT_LIGHT_ENABLE);
+double nightModeValue = MODULE_OFF;
+
+When.ModuleParameterChanged((module, parameter) =&gt;
+{
+  if(parameter.DecimalValue == SENSOR_ON)
+  {
+    nightModeValue = Modules
+        .InDomain("HomeAutomation.House").WithName("Night mode").Get()
+        .Parameter("Status.Level").DecimalValue;
+    switch (module.Instance.Name)
+  	{
+      case "Gang - Bevegelsessensor":
+      case "Trapp - Bevegelsessensor":
+        if(nightModeValue == MODULE_ON)
+        {
+          Modules.WithName("Gang - Taklys").Command("Control.Level").Set("30");
+          Modules.WithName("Bad - Downlights").Command("Control.Level").Set("30");
+        }
+        else
+        {
+          Modules.WithName("Gang - Taklys").Command("Control.Level").Set("100");
+          Modules.WithName("Bad - Lys speil").On();
+          Modules.WithName("Gang nede - Taklys").Command("Control.Level").Set("70");
+        }
+    	break;
+      case "Kj??kken - Bevegelsessensor":
+        if(nightModeValue == MODULE_ON)
+        {
+          Modules.WithName("Kj??kken - Downlights").Command("Control.Level").Set("30");
+        }
+        else
+        {
+          Modules.WithName("Kj??kken - Benkelys").On();
+        }
+        break;
+      case "Bad - Bevegelsessensor":
+      	if(nightModeValue == MODULE_OFF)
+        {
+          Modules.WithName("Bad - Lys speil").On();
+          Modules.WithName("Bad - Downlights").Off();
+        }
+      	break;
+    }
+    return false;
+  }
+  return true; 
+});
+while (Program.IsEnabled)
+{
+  if(nightModeValue == MODULE_ON)
+  {
+	nightLight_devices.Each((mod) =&gt;
+	{
+      var timeout = mod.Parameter(TURNOFF_TIMEOUT).DecimalValue * 60;
+      var lastevent = mod.Parameter(LAST_EVENT).UpdateTime;
+      var lastupdate = mod.Parameter("Status.Level").UpdateTime;
+      var checktime = lastevent.Ticks;
+      if (checktime &lt; lastupdate.Ticks) checktime = lastupdate.Ticks;
+      var elapsed = new TimeSpan(DateTime.UtcNow.Ticks - checktime);
+      if (elapsed.TotalSeconds &gt; timeout)
+      {
+        Program.Notify("Nattlys", mod.Instance.Address + " " + mod.Instance.Name + "&lt;br/&gt;;skrudd av.");
+        mod.Off();
+      }
+      return false;
+	});
+  	Pause(5);
+  }
+}
+Program.GoBackground();</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1004</Address>
+  <Name>Nattlys</Name>
+  <Description />
+  <Group>Lights</Group>
+  <Features>
+    <ProgramFeature>
+      <FieldType>checkbox</FieldType>
+      <ForDomains />
+      <ForTypes>Switch,Light,Dimmer</ForTypes>
+      <Property>HomeGenie.NightLight.Enable</Property>
+      <Description>Enable Night Light Control</Description>
+    </ProgramFeature>
+    <ProgramFeature>
+      <FieldType>slider:0:10:1</FieldType>
+      <ForDomains />
+      <ForTypes>Switch,Light,Dimmer</ForTypes>
+      <Property>HomeGenie.NightLight.SwitchOffTimeout</Property>
+      <Description>Turn off after timeout (minutes)</Description>
+    </ProgramFeature>
+  </Features>
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime>2016-10-17T14:07:48.659642Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>
