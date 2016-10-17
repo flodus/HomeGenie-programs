@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>Program.UseWidget("weather/yr/forecast");
+Program.AddOption("Location", "City", "Enter your location", "text");
+Program.AddOption("Language", "EN", "Choose between English (EN) and Norwegian (NO)", "text");
+
+Program.Parameter("Conditions.City").Value = "";
+Program.Parameter("Conditions.TemperatureC").Value = "";
+Program.Parameter("Conditions.TemperatureF").Value = "";
+Program.Parameter("Conditions.DisplayLocation").Value = "";
+Program.Parameter("Conditions.IconUrl").Value = "";
+Program.Parameter("Conditions.Description").Value = "";
+
+Program.Run();</ScriptCondition>
+  <ScriptSource>string locationId = Program.Option("Location").Value;
+string language = Program.Option("Language").Value;
+string locationUrl = String.Format("https://www.yr.no/api/v0/locations/id/{0}", locationId);
+string forecastUrl = String.Format("{0}/forecast", locationUrl);
+DateTime lastUpdate = DateTime.Now;
+DateTime nextUpdate = DateTime.Now;
+double maxTemp = -50;
+double minTemp = 50;
+
+Func&lt;string, dynamic&gt; GetData = (string url) =&gt; 
+{
+  dynamic returnValue = null;
+  try
+  {
+    returnValue = Net.WebService(url).GetData();
+  }
+  catch(Exception ex)
+  {
+    Program.Notify("Yr weather ERROR!", "Unable to get data from service. " + ex.Message);
+    Console.WriteLine( ex.Message );
+    Pause(10);
+  }
+  return returnValue;
+};
+
+Action&lt;dynamic&gt; FindExtremes = (dynamic forecast) =&gt;
+{
+  foreach(var period in forecast)
+  {
+	if(period.temperature.value &gt; maxTemp)
+      maxTemp = period.temperature.value;
+    if(period.temperature.value &lt; minTemp)
+      minTemp = period.temperature.value;
+  }
+};
+
+while (Program.IsEnabled)
+{
+  var updateDelayMinutes = 30;
+ 
+  dynamic locationData = GetData(locationUrl);
+  var locationForecast = GetData(forecastUrl);
+  
+  if(DateTime.Now.Ticks &gt; nextUpdate.Ticks)
+  {
+    Program.Notify("Weather update", "Getting data");
+  	locationData = GetData(locationUrl);
+  	locationForecast = GetData(forecastUrl);
+    nextUpdate = DateTime.Parse(locationForecast.update.ToString());
+    Program.RaiseEvent("Program.UiRefresh", "Data Updated", "");
+  }
+    
+  string locationName = locationData.name;
+  string locationElevation = locationData.elevation;
+  string locationRegion = locationData.region.name;
+  string locationCountry = locationData.country.name;
+
+  var forecastSymbol = locationForecast.longIntervals[0].symbol.n;
+  var forecastSymbolVariant = locationForecast.longIntervals[0].symbol.var;
+  if(forecastSymbolVariant == null)
+    forecastSymbolVariant = string.Empty;
+  var forecastTemperature = (int)locationForecast.longIntervals[0].temperature.value;
+  var forecastWindSpeed = locationForecast.longIntervals[0].wind.speed;
+  var forecastFrom = locationForecast.longIntervals[0].start;
+  var forecastTo = locationForecast.longIntervals[0].end;
+  lastUpdate = DateTime.Parse(locationForecast.created.ToString());
+  FindExtremes.Invoke(locationForecast.longIntervals);
+  
+  Program.Parameter("Conditions.City").Value = locationName;
+  Program.Parameter("Conditions.Region").Value = locationRegion;
+  Program.Parameter("Conditions.Country").Value = locationCountry;
+  Program.Parameter("Conditions.WeatherSymbol").Value = forecastSymbol;
+  Program.Parameter("Conditions.WeatherSymbol.Variant").Value = forecastSymbolVariant;
+  Program.Parameter("Conditions.Temperature").Value = forecastTemperature.ToString();
+  Program.Parameter("Conditions.WindSpeed").Value = forecastWindSpeed.ToString();
+  Program.Parameter("Conditions.From").Value = forecastFrom;
+  Program.Parameter("Conditions.To").Value = forecastTo;
+  Program.Parameter("Conditions.NextUpdate").Value = nextUpdate.ToString();
+  Program.Parameter("Conditions.LastUpdate").Value = lastUpdate.ToString();
+  Program.Parameter("Conditions.MinTemp").Value = minTemp.ToString();
+  Program.Parameter("Conditions.MaxTemp").Value = maxTemp.ToString();
+
+  for(int i = 1; i &lt;= 4; i++)
+  {
+    forecastSymbolVariant = string.Empty;
+    Program.Parameter("Conditions.Forecast." + i + ".WeatherSymbol").Value = locationForecast.longIntervals[i].symbol.n;
+    forecastSymbolVariant = locationForecast.longIntervals[i].symbol.var;
+    if(forecastSymbolVariant == null)
+    	forecastSymbolVariant = string.Empty;
+    Program.Parameter("Conditions.Forecast." + i + ".WeatherSymbol.Variant").Value = forecastSymbolVariant.ToString();
+    forecastTemperature = (int)locationForecast.longIntervals[i].temperature.value;
+    Program.Parameter("Conditions.Forecast." + i + ".Temperature").Value = forecastTemperature.ToString();
+    forecastFrom = DateTime.Parse(locationForecast.longIntervals[i].start.ToString());
+    forecastTo = DateTime.Parse(locationForecast.longIntervals[i].end.ToString());
+    var period = string.Format("{0} - {1}", forecastFrom.Hour, forecastTo.Hour);
+    Program.Parameter("Conditions.Forecast." + i + ".Period").Value = period;
+  }
+
+}</ScriptSource>
+  <ScriptErrors />
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1000</Address>
+  <Name>Weather from Yr</Name>
+  <Description />
+  <Group>Weather and Environment</Group>
+  <Features />
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime>2016-10-17T16:44:36.6890793Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>
