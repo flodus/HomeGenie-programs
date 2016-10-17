@@ -1,0 +1,26 @@
+{
+    "author": "Sigbjørn Trageton",
+    "version": "v1.0",
+    "title": "Forecast from Yr",
+    "description": "Gets forecast from the Norwegian weather service Yr",
+    "published": "2016-10-17T17:25:00Z",
+    "sourcecode": "",
+    "homepage": "http://www.yr.no", 
+    "widgets": [
+        { 
+            "file": "Yr_forecast.zip",
+            "name":"Yr forecast",
+            "description": "Widget for render Yr forecast"
+        }
+    ],
+    "programs": [
+        { 
+            "file": Yr_Forecast.hgx",
+            "name":"Yr forecast",
+            "description": "Yr app",
+            "uid": "100202",
+            "group": "Weather and Environment" 
+        }
+    ],
+    "interfaces": [ ]
+}
